@@ -19,3 +19,241 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+/* ===================================================
+╔════════════════════════════════════════════════╗
+║                TABLEAU DE BORD BOT            ║
+║          VERSION FINALE RENFORCÉE             ║
+║      MULTILINGUE + BACKUP VPS + MINI-JEUX     ║
+╠════════════════════════════════════════════════╣
+║  Zone 1️⃣ : IMPORTS & CONFIGURATION ⚠️       ║
+║  Zone 2️⃣ : BASE DE DONNÉES SQLITE ⚠️        ║
+║  Zone 3️⃣ : CONFIG BOT & VARIABLES MODIFIABLES 🟢║
+║  Zone 4️⃣ : FONCTIONS UTILITAIRES 🟢          ║
+║  Zone 5️⃣ : ÉVÉNEMENTS DISCORD 🟢             ║
+║  Zone 6️⃣ : BACKUP & STABILITÉ VPS 🟢         ║
+║  Zone 7️⃣ : COMMANDES ADMIN & MINI-DASHBOARD 🟢║
+║  Zone 8️⃣ : LOGIN BOT ⚠️                     ║
+╚════════════════════════════════════════════════╝
+=================================================== */
+
+/* ===================================================
+1️⃣ IMPORTS & CONFIGURATION ⚠️
+=================================================== */
+require('dotenv').config();
+const { Client, GatewayIntentBits, Partials, Collection } = require('discord.js');
+const axios = require('axios');
+const express = require('express');
+const bodyParser = require('body-parser');
+const sqlite3 = require('sqlite3').verbose();
+const fs = require('fs');
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.MessageContent
+  ]
+});
+
+const app = express();
+app.use(bodyParser.json());
+/* ===================================================
+FIN 1️⃣
+=================================================== */
+
+/* ===================================================
+2️⃣ BASE DE DONNÉES SQLITE ⚠️
+=================================================== */
+const db = new sqlite3.Database('./bot.db', (err) => {
+  if (err) console.error("Erreur DB:", err.message);
+});
+
+db.run(`
+  CREATE TABLE IF NOT EXISTS server_config (
+    server_id TEXT PRIMARY KEY,
+    welcome_message TEXT,
+    mod_channel TEXT,
+    ticket_channel_prefix TEXT,
+    lang TEXT DEFAULT 'fr'
+  )
+`);
+
+db.run(`
+  CREATE TABLE IF NOT EXISTS lang_admins (
+    server_id TEXT,
+    user_id TEXT,
+    PRIMARY KEY(server_id, user_id)
+  )
+`);
+
+db.run(`
+  CREATE TABLE IF NOT EXISTS mini_games_scores (
+    server_id TEXT,
+    user_id TEXT,
+    game TEXT,
+    score INTEGER,
+    PRIMARY KEY(server_id, user_id, game)
+  )
+`);
+/* ===================================================
+FIN 2️⃣
+=================================================== */
+
+/* ===================================================
+3️⃣ CONFIG BOT & VARIABLES MODIFIABLES 🟢
+=================================================== */
+const AUTO_ROLE = "Membre";
+const BOT_ADMIN_ROLE_DEFAULT = "Bot Admin"; // Rôle par défaut pour contrôle total
+let BOT_ADMIN_ROLE = BOT_ADMIN_ROLE_DEFAULT; 
+
+const memory = {};
+const xpSystem = {};
+const spamMap = new Map();
+const gameChannels = {
+  textOnly: [],
+  imageOnly: [],
+  videoOnly: []
+};
+
+const FORBIDDEN_WORDS = ["insulte1","insulte2"];
+const FORBIDDEN_LINKS = ["discord.gg","bit.ly"];
+/* ===================================================
+FIN 3️⃣
+=================================================== */
+
+/* ===================================================
+4️⃣ FONCTIONS UTILITAIRES 🟢
+=================================================== */
+function addXP(userId) {
+  if (!xpSystem[userId]) xpSystem[userId] = { xp: 0, level: 1 };
+  xpSystem[userId].xp += Math.floor(Math.random() * 5) + 5;
+  if (xpSystem[userId].xp >= xpSystem[userId].level * 100) {
+    xpSystem[userId].xp = 0;
+    xpSystem[userId].level++;
+    return true;
+  }
+  return false;
+}
+
+function sanitize(text) {
+  return text.replace(/https?:\/\/[^\s]+/g, '[link]');
+}
+
+function checkBotAdmin(member) {
+  return member.roles.cache.some(r => r.name === BOT_ADMIN_ROLE);
+}
+/* ===================================================
+FIN 4️⃣
+=================================================== */
+
+/* ===================================================
+5️⃣ ÉVÉNEMENTS DISCORD 🟢
+=================================================== */
+// Bienvenue
+client.on("guildMemberAdd", async member => {
+  db.get(`SELECT welcome_message, lang FROM server_config WHERE server_id=?`, [member.guild.id], async (err,row)=>{
+    const welcome = row?.welcome_message || `Bienvenue ${member.user.username} !`;
+    await member.send(welcome);
+  });
+});
+
+// Gestion messages texte/image/vidéo
+client.on("messageCreate", async message => {
+  if (message.author.bot) return;
+
+  // Spam
+  const now = Date.now();
+  const userData = spamMap.get(message.author.id) || { count:0, last:now };
+  if (now - userData.last < 4000) {
+    userData.count++;
+    if (userData.count >= 5) {
+      message.member.timeout(10*60*1000, "Spam détecté").catch(()=>{});
+      return;
+    }
+  } else userData.count = 1;
+  userData.last = now;
+  spamMap.set(message.author.id, userData);
+
+  // Vérification salon text/image/video
+  if (gameChannels.textOnly.includes(message.channel.id) && message.attachments.size > 0) {
+    await message.delete().catch(()=>{});
+    return message.reply("🚫 Ce salon est réservé aux messages texte uniquement !");
+  }
+  if (gameChannels.imageOnly.includes(message.channel.id) && !message.attachments.some(a => a.contentType?.startsWith("image"))) {
+    await message.delete().catch(()=>{});
+    return message.reply("🚫 Ce salon est réservé aux images uniquement !");
+  }
+  if (gameChannels.videoOnly.includes(message.channel.id) && !message.attachments.some(a => a.contentType?.startsWith("video"))) {
+    await message.delete().catch(()=>{});
+    return message.reply("🚫 Ce salon est réservé aux vidéos uniquement !");
+  }
+
+  // XP automatique
+  addXP(message.author.id);
+});
+
+/* ===================================================
+6️⃣ BACKUP & STABILITÉ VPS 🟢
+=================================================== */
+setInterval(() => {
+  const backupPath = `./backup_bot_${Date.now()}.db`;
+  fs.copyFile('./bot.db', backupPath, (err) => {
+    if (err) console.error('🚨 Erreur backup DB:', err);
+    else console.log('Backup DB créé :', backupPath);
+  });
+}, 24*60*60*1000);
+/* ===================================================
+FIN 6️⃣
+=================================================== */
+
+/* ===================================================
+7️⃣ COMMANDES ADMIN & MINI-DASHBOARD 🟢
+=================================================== */
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isChatInputCommand()) return;
+
+  // --- Définir rôle bot admin
+  if (interaction.commandName === 'set-bot-admin-role') {
+    if (interaction.user.id !== interaction.guild.ownerId) 
+      return interaction.reply({ content: '🚨 Seul le propriétaire peut définir le rôle.', ephemeral: true });
+    const roleName = interaction.options.getString('role');
+    BOT_ADMIN_ROLE = roleName;
+    return interaction.reply(`✅ Rôle de contrôle total défini sur : ${roleName}`);
+  }
+
+  // Vérification Bot Admin pour commandes sensibles
+  const sensitiveCommands = ['reset-scores','configure-salon','set-welcome','set-ticket-prefix'];
+  if (sensitiveCommands.includes(interaction.commandName)) {
+    if (!checkBotAdmin(interaction.member)) {
+      return interaction.reply({ content: '🚨 Vous n’êtes pas autorisé à utiliser cette commande.', ephemeral: true });
+    }
+  }
+
+  // --- Mini-dashboard
+  if (interaction.commandName === 'dashboard') {
+    const embed = {
+      color: 0x00ff99,
+      title: `📊 Dashboard - ${interaction.guild.name}`,
+      fields: [
+        { name: "Membres", value: `${interaction.guild.memberCount}`, inline: true },
+        { name: "Rôle admin bot", value: BOT_ADMIN_ROLE, inline: true }
+      ],
+      timestamp: new Date()
+    };
+    return interaction.reply({ embeds: [embed], ephemeral: true });
+  }
+});
+/* ===================================================
+FIN 7️⃣
+=================================================== */
+
+/* ===================================================
+8️⃣ LOGIN BOT ⚠️
+=================================================== */
+client.login(process.env.DISCORD_TOKEN)
+  .then(() => console.log('Bot connecté ✅'))
+  .catch(err => console.error('🚨 Erreur login bot:', err));
+/* ===================================================
+FIN 8️⃣
+=================================================== */
