@@ -36,11 +36,8 @@ SOFTWARE.
 ╚════════════════════════════════════════════════╝
 =================================================== */
 
-/* ===================================================
-1️⃣ IMPORTS & CONFIGURATION ⚠️
-=================================================== */
 require('dotenv').config();
-const { Client, GatewayIntentBits, Partials, Collection } = require('discord.js');
+const { Client, GatewayIntentBits } = require('discord.js');
 const axios = require('axios');
 const express = require('express');
 const bodyParser = require('body-parser');
@@ -58,9 +55,6 @@ const client = new Client({
 
 const app = express();
 app.use(bodyParser.json());
-/* ===================================================
-FIN 1️⃣
-=================================================== */
 
 /* ===================================================
 2️⃣ BASE DE DONNÉES SQLITE ⚠️
@@ -96,16 +90,13 @@ db.run(`
     PRIMARY KEY(server_id, user_id, game)
   )
 `);
-/* ===================================================
-FIN 2️⃣
-=================================================== */
 
 /* ===================================================
 3️⃣ CONFIG BOT & VARIABLES MODIFIABLES 🟢
 =================================================== */
 const AUTO_ROLE = "Membre";
-const BOT_ADMIN_ROLE_DEFAULT = "Bot Admin"; // Rôle par défaut pour contrôle total
-let BOT_ADMIN_ROLE = BOT_ADMIN_ROLE_DEFAULT; 
+const BOT_ADMIN_ROLE_DEFAULT = "Bot Admin";
+let BOT_ADMIN_ROLE = BOT_ADMIN_ROLE_DEFAULT;
 
 const memory = {};
 const xpSystem = {};
@@ -118,9 +109,6 @@ const gameChannels = {
 
 const FORBIDDEN_WORDS = ["insulte1","insulte2"];
 const FORBIDDEN_LINKS = ["discord.gg","bit.ly"];
-/* ===================================================
-FIN 3️⃣
-=================================================== */
 
 /* ===================================================
 4️⃣ FONCTIONS UTILITAIRES 🟢
@@ -143,14 +131,10 @@ function sanitize(text) {
 function checkBotAdmin(member) {
   return member.roles.cache.some(r => r.name === BOT_ADMIN_ROLE);
 }
-/* ===================================================
-FIN 4️⃣
-=================================================== */
 
 /* ===================================================
 5️⃣ ÉVÉNEMENTS DISCORD 🟢
 =================================================== */
-// Bienvenue
 client.on("guildMemberAdd", async member => {
   db.get(`SELECT welcome_message, lang FROM server_config WHERE server_id=?`, [member.guild.id], async (err,row)=>{
     const welcome = row?.welcome_message || `Bienvenue ${member.user.username} !`;
@@ -158,11 +142,9 @@ client.on("guildMemberAdd", async member => {
   });
 });
 
-// Gestion messages texte/image/vidéo
 client.on("messageCreate", async message => {
   if (message.author.bot) return;
 
-  // Spam
   const now = Date.now();
   const userData = spamMap.get(message.author.id) || { count:0, last:now };
   if (now - userData.last < 4000) {
@@ -175,7 +157,6 @@ client.on("messageCreate", async message => {
   userData.last = now;
   spamMap.set(message.author.id, userData);
 
-  // Vérification salon text/image/video
   if (gameChannels.textOnly.includes(message.channel.id) && message.attachments.size > 0) {
     await message.delete().catch(()=>{});
     return message.reply("🚫 Ce salon est réservé aux messages texte uniquement !");
@@ -189,7 +170,6 @@ client.on("messageCreate", async message => {
     return message.reply("🚫 Ce salon est réservé aux vidéos uniquement !");
   }
 
-  // XP automatique
   addXP(message.author.id);
 });
 
@@ -203,9 +183,6 @@ setInterval(() => {
     else console.log('Backup DB créé :', backupPath);
   });
 }, 24*60*60*1000);
-/* ===================================================
-FIN 6️⃣
-=================================================== */
 
 /* ===================================================
 7️⃣ COMMANDES ADMIN & MINI-DASHBOARD 🟢
@@ -213,7 +190,6 @@ FIN 6️⃣
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
-  // --- Définir rôle bot admin
   if (interaction.commandName === 'set-bot-admin-role') {
     if (interaction.user.id !== interaction.guild.ownerId) 
       return interaction.reply({ content: '🚨 Seul le propriétaire peut définir le rôle.', ephemeral: true });
@@ -222,7 +198,6 @@ client.on('interactionCreate', async interaction => {
     return interaction.reply(`✅ Rôle de contrôle total défini sur : ${roleName}`);
   }
 
-  // Vérification Bot Admin pour commandes sensibles
   const sensitiveCommands = ['reset-scores','configure-salon','set-welcome','set-ticket-prefix'];
   if (sensitiveCommands.includes(interaction.commandName)) {
     if (!checkBotAdmin(interaction.member)) {
@@ -230,7 +205,6 @@ client.on('interactionCreate', async interaction => {
     }
   }
 
-  // --- Mini-dashboard
   if (interaction.commandName === 'dashboard') {
     const embed = {
       color: 0x00ff99,
@@ -244,9 +218,6 @@ client.on('interactionCreate', async interaction => {
     return interaction.reply({ embeds: [embed], ephemeral: true });
   }
 });
-/* ===================================================
-FIN 7️⃣
-=================================================== */
 
 /* ===================================================
 8️⃣ LOGIN BOT ⚠️
@@ -254,6 +225,14 @@ FIN 7️⃣
 client.login(process.env.DISCORD_TOKEN)
   .then(() => console.log('Bot connecté ✅'))
   .catch(err => console.error('🚨 Erreur login bot:', err));
+
 /* ===================================================
-FIN 8️⃣
+9️⃣ HEALTH CHECK pour Render ⚠️
 =================================================== */
+app.get('/healthz', (req, res) => {
+  res.status(200).send('OK');
+});
+
+// Démarrage du serveur Express
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Serveur Express lancé sur le port ${PORT}`));
